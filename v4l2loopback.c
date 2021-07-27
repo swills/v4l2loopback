@@ -1301,18 +1301,18 @@ static int v4l2loopback_set_ctrl(struct v4l2_loopback_device *dev, u32 id,
 	case CID_SUSTAIN_FRAMERATE:
 		if (val < 0 || val > 1)
 			return -EINVAL;
-		spin_lock(&dev->lock);
+		spin_lock_bh(&dev->lock);
 		dev->sustain_framerate = val;
 		check_timers(dev);
-		spin_unlock(&dev->lock);
+		spin_unlock_bh(&dev->lock);
 		break;
 	case CID_TIMEOUT:
 		if (val < 0 || val > MAX_TIMEOUT)
 			return -EINVAL;
-		spin_lock(&dev->lock);
+		spin_lock_bh(&dev->lock);
 		dev->timeout_jiffies = msecs_to_jiffies(val);
 		check_timers(dev);
-		spin_unlock(&dev->lock);
+		spin_unlock_bh(&dev->lock);
 		allocate_timeout_image(dev);
 		break;
 	case CID_TIMEOUT_IMAGE_IO:
@@ -1584,7 +1584,7 @@ static void buffer_written(struct v4l2_loopback_device *dev,
 {
 	del_timer_sync(&dev->sustain_timer);
 	del_timer_sync(&dev->timeout_timer);
-	spin_lock(&dev->lock);
+	spin_lock_bh(&dev->lock);
 
 	dev->bufpos2index[dev->write_position % dev->used_buffers] =
 		buf->buffer.index;
@@ -1593,7 +1593,7 @@ static void buffer_written(struct v4l2_loopback_device *dev,
 	dev->reread_count = 0;
 
 	check_timers(dev);
-	spin_unlock(&dev->lock);
+	spin_unlock_bh(&dev->lock);
 }
 
 /* put buffer to queue
@@ -1650,11 +1650,11 @@ static int can_read(struct v4l2_loopback_device *dev,
 {
 	int ret;
 
-	spin_lock(&dev->lock);
+	spin_lock_bh(&dev->lock);
 	check_timers(dev);
 	ret = dev->write_position > opener->read_position ||
 	      dev->reread_count > opener->reread_count || dev->timeout_happened;
-	spin_unlock(&dev->lock);
+	spin_unlock_bh(&dev->lock);
 	return ret;
 }
 
@@ -1672,7 +1672,7 @@ static int get_capture_buffer(struct file *file)
 		return -EAGAIN;
 	wait_event_interruptible(dev->read_event, can_read(dev, opener));
 
-	spin_lock(&dev->lock);
+	spin_lock_bh(&dev->lock);
 	if (dev->write_position == opener->read_position) {
 		if (dev->reread_count > opener->reread_count + 2)
 			opener->reread_count = dev->reread_count - 1;
@@ -1689,7 +1689,7 @@ static int get_capture_buffer(struct file *file)
 	}
 	timeout_happened = dev->timeout_happened;
 	dev->timeout_happened = 0;
-	spin_unlock(&dev->lock);
+	spin_unlock_bh(&dev->lock);
 
 	ret = dev->bufpos2index[pos];
 	if (timeout_happened) {
