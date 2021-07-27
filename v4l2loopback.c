@@ -14,6 +14,7 @@
  *
  */
 #include <linux/version.h>
+#define	LINUX_VERSION_CODE KERNEL_VERSION(5, 7, 1)
 #include <linux/vmalloc.h>
 #include <linux/mm.h>
 #include <linux/time.h>
@@ -22,8 +23,10 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/fs.h>
-#include <linux/capability.h>
-#include <linux/eventpoll.h>
+#include <linux/idr.h>
+#include <linux/spinlock.h>
+/* #include <linux/capability.h> */
+/* #include <linux/eventpoll.h> */
 #include <media/v4l2-ioctl.h>
 #include <media/v4l2-common.h>
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 29)
@@ -164,21 +167,15 @@ void *v4l2l_vzalloc(unsigned long size)
 static inline void v4l2l_get_timestamp(struct v4l2_buffer *b)
 {
 	/* ktime_get_ts is considered deprecated, so use ktime_get_ts64 if possible */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 17, 0)
 	struct timespec ts;
 	ktime_get_ts(&ts);
-#else
-	struct timespec64 ts;
-	ktime_get_ts64(&ts);
-#endif
-
 	b->timestamp.tv_sec = ts.tv_sec;
 	b->timestamp.tv_usec = (ts.tv_nsec / NSEC_PER_USEC);
 }
 
-#if !defined(__poll_t)
+/* #if !defined(__poll_t)
 typedef unsigned __poll_t;
-#endif
+#endif */
 
 /* module constants
  *  can be overridden during he build process using something like
@@ -1304,18 +1301,18 @@ static int v4l2loopback_set_ctrl(struct v4l2_loopback_device *dev, u32 id,
 	case CID_SUSTAIN_FRAMERATE:
 		if (val < 0 || val > 1)
 			return -EINVAL;
-		spin_lock_bh(&dev->lock);
+		spin_lock(&dev->lock);
 		dev->sustain_framerate = val;
 		check_timers(dev);
-		spin_unlock_bh(&dev->lock);
+		spin_unlock(&dev->lock);
 		break;
 	case CID_TIMEOUT:
 		if (val < 0 || val > MAX_TIMEOUT)
 			return -EINVAL;
-		spin_lock_bh(&dev->lock);
+		spin_lock(&dev->lock);
 		dev->timeout_jiffies = msecs_to_jiffies(val);
 		check_timers(dev);
-		spin_unlock_bh(&dev->lock);
+		spin_unlock(&dev->lock);
 		allocate_timeout_image(dev);
 		break;
 	case CID_TIMEOUT_IMAGE_IO:
@@ -1587,7 +1584,7 @@ static void buffer_written(struct v4l2_loopback_device *dev,
 {
 	del_timer_sync(&dev->sustain_timer);
 	del_timer_sync(&dev->timeout_timer);
-	spin_lock_bh(&dev->lock);
+	spin_lock(&dev->lock);
 
 	dev->bufpos2index[dev->write_position % dev->used_buffers] =
 		buf->buffer.index;
@@ -1596,7 +1593,7 @@ static void buffer_written(struct v4l2_loopback_device *dev,
 	dev->reread_count = 0;
 
 	check_timers(dev);
-	spin_unlock_bh(&dev->lock);
+	spin_unlock(&dev->lock);
 }
 
 /* put buffer to queue
@@ -1653,11 +1650,11 @@ static int can_read(struct v4l2_loopback_device *dev,
 {
 	int ret;
 
-	spin_lock_bh(&dev->lock);
+	spin_lock(&dev->lock);
 	check_timers(dev);
 	ret = dev->write_position > opener->read_position ||
 	      dev->reread_count > opener->reread_count || dev->timeout_happened;
-	spin_unlock_bh(&dev->lock);
+	spin_unlock(&dev->lock);
 	return ret;
 }
 
@@ -1675,7 +1672,7 @@ static int get_capture_buffer(struct file *file)
 		return -EAGAIN;
 	wait_event_interruptible(dev->read_event, can_read(dev, opener));
 
-	spin_lock_bh(&dev->lock);
+	spin_lock(&dev->lock);
 	if (dev->write_position == opener->read_position) {
 		if (dev->reread_count > opener->reread_count + 2)
 			opener->reread_count = dev->reread_count - 1;
@@ -1692,7 +1689,7 @@ static int get_capture_buffer(struct file *file)
 	}
 	timeout_happened = dev->timeout_happened;
 	dev->timeout_happened = 0;
-	spin_unlock_bh(&dev->lock);
+	spin_unlock(&dev->lock);
 
 	ret = dev->bufpos2index[pos];
 	if (timeout_happened) {
@@ -2789,9 +2786,11 @@ static int __init v4l2loopback_init_module(void)
 	int i;
 	MARK();
 
+	/*
 	err = misc_register(&v4l2loopback_misc);
 	if (err < 0)
 		return err;
+	*/
 
 	if (devices < 0) {
 		devices = 1;
@@ -2873,7 +2872,7 @@ static int __init v4l2loopback_init_module(void)
 
 	return 0;
 error:
-	misc_deregister(&v4l2loopback_misc);
+	/* misc_deregister(&v4l2loopback_misc); */
 	return err;
 }
 
@@ -2892,7 +2891,9 @@ static void v4l2loopback_cleanup_module(void)
 MODULE_ALIAS_MISCDEV(MISC_DYNAMIC_MINOR);
 
 module_init(v4l2loopback_init_module);
+#ifdef MODULE
 module_exit(v4l2loopback_cleanup_module);
+#endif
 
 /*
  * fake usage of unused functions
